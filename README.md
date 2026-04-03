@@ -64,7 +64,7 @@ ssh -o StrictHostKeyChecking=no root@123.123.123.123
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/MBolshakov/mtproxy/main/mtproxy.sh
-sudo bash mtproxy-oneclick.sh
+sudo bash mtproxy.sh
 ```
 или одной строкой:
 ```bash
