@@ -97,7 +97,10 @@ https://YOUR_IP
 
 ## 🔗 Подключение к MTProxy
 
-Скрипт выведет ссылку после установки.
+Для получения секрета выполни команду 
+```bash
+SECRET=$(grep -oP '\-S \K[^ ]+' /etc/systemd/system/mtproxy.service) && IP=$(curl -s ifconfig.me) && echo "tg://proxy?server=$IP&port=443&secret=$SECRET"
+```
 
 Пример:
 
