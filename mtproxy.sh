@@ -14,7 +14,7 @@ fi
 # IP и SNI для Fake TLS
 #######################################
 IP=$(curl -s --max-time 5 ifconfig.me)
-FAKE_DOMAIN="microsoft.com" # Домен для обхода DPI
+FAKE_DOMAIN="microsoft.com"
 
 #######################################
 # ПОРТЫ
@@ -27,7 +27,6 @@ MTPROXY_PORT=9443
 #######################################
 # ПАКЕТЫ
 #######################################
-
 export DEBIAN_FRONTEND=noninteractive
 echo "sslh sslh/inetd_or_standalone select standalone" | debconf-set-selections
 
@@ -43,8 +42,9 @@ rm -rf MTProxy || true
 git clone https://github.com/TelegramMessenger/MTProxy
 cd MTProxy
 
-# Если на этапе make выдаст ошибку OpenSSL 3.x, раскомментируй строку ниже:
-# sed -i 's/CFLAGS=/CFLAGS=-Wno-error\ /g' Makefile && apt install -y libssl1.1 2>/dev/null || true
+# ИСПРАВЛЕНИЕ: Автоматический патч для компиляции на новых Ubuntu (OpenSSL 3.x)
+sed -i 's/ERR_remove_thread_state(NULL);//g' src/engine.c
+sed -i 's/RAND_pseudo_bytes/RAND_bytes/g' src/engine.c
 
 make
 cd objs/bin
@@ -52,8 +52,8 @@ cd objs/bin
 curl -s https://core.telegram.org/getProxySecret -o proxy-secret
 curl -s https://core.telegram.org/getProxyConfig -o proxy-multi.conf
 
-# ИСПРАВЛЕНИЕ: Генерируем секрет в формате dd (Fake TLS + SNI)
-SECRET="dd${FAKE_DOMAIN}$(head -c 16 /dev/urandom | xxd -ps)"
+# ИСПРАВЛЕНИЕ: Генерация секрета БЕЗ переноса строки (tr -d '\n')
+SECRET="dd${FAKE_DOMAIN}$(head -c 16 /dev/urandom | xxd -p | tr -d '\n')"
 
 #######################################
 # MTProxy systemd
@@ -148,13 +148,14 @@ h1 { color: #2c3e50; }
 EOF
 
 #######################################
-# NGINX
+# NGINX (ИСПРАВЛЕНО для новых версий)
 #######################################
 rm -f /etc/nginx/sites-enabled/default
 
 cat > /etc/nginx/sites-available/landing.conf <<EOF
 server {
-    listen 127.0.0.1:${NGINX_PORT} ssl http2;
+    listen 127.0.0.1:${NGINX_PORT} ssl;
+    http2 on;
     server_name _;
 
     ssl_certificate /etc/nginx/ssl/self.crt;
@@ -176,7 +177,7 @@ EOF
 ln -sf /etc/nginx/sites-available/landing.conf /etc/nginx/sites-enabled/landing.conf
 
 #######################################
-# SSLH (ИСПРАВЛЕН)
+# SSLH (ИСПРАВЛЕН ПРИОРИТЕТ ПРАВИЛ)
 #######################################
 cat > /etc/systemd/system/sslh-mux.service <<EOF
 [Unit]
@@ -187,7 +188,7 @@ After=network.target
 ExecStart=/usr/sbin/sslh-select -f \
   --listen 0.0.0.0:443 \
   --ssh 127.0.0.1:${SSH_PORT} \
-  --sni ${FAKE_DOMAIN}:127.0.0.1:${MTPROXY_PORT} \
+  --sni ^${FAKE_DOMAIN}$:127.0.0.1:${MTPROXY_PORT} \
   --tls 127.0.0.1:${NGINX_PORT}
 Restart=always
 
@@ -206,7 +207,6 @@ ufw allow 22/tcp
 ufw allow 80/tcp
 ufw allow 443/tcp
 
-# Закрываем внешние порты внутренних сервисов
 ufw deny ${NGINX_PORT}/tcp
 ufw deny ${MTPROXY_PORT}/tcp
 
@@ -231,7 +231,7 @@ systemctl restart sslh-mux
 echo ""
 echo "=== ГОТОВО ==="
 echo ""
-echo "Ссылка для подключения:"
+echo "Ссылка для подключения (скопируй её полностью):"
 echo "tg://proxy?server=$IP&port=443&secret=$SECRET"
 echo ""
 echo "https://t.me/proxy?server=$IP&port=443&secret=$SECRET"
@@ -239,18 +239,6 @@ echo ""
 echo "HTTP:  http://$IP"
 echo "HTTPS: https://$IP"
 echo ""
-echo "Конфиг обновляется ежедневно в 3:00"
-echo ""
 echo "Управление:"
 echo "  systemctl status mtproxy"
 echo "  systemctl restart mtproxy"
-echo "  systemctl stop mtproxy"
-echo "  systemctl start mtproxy"
-echo ""
-echo "Логи:"
-echo "  journalctl -u mtproxy -f"
-echo "  journalctl -u sslh-mux -f"
-echo ""
-echo "Ручное обновление:"
-echo "  /opt/MTProxy/update-config.sh"
-```
