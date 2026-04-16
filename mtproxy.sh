@@ -1,6 +1,7 @@
 #!/bin/bash
 
-set -e
+# Временно отключаем падение скрипта для этапа компиляции
+set +e
 
 echo "=== MTProxy + Nginx + sslh Installer ==="
 echo ""
@@ -42,17 +43,29 @@ rm -rf MTProxy || true
 git clone https://github.com/TelegramMessenger/MTProxy
 cd MTProxy
 
-# ИСПРАВЛЕНИЕ: Автоматический патч для компиляции на новых Ubuntu (OpenSSL 3.x)
-sed -i 's/ERR_remove_thread_state(NULL);//g' src/engine.c
-sed -i 's/RAND_pseudo_bytes/RAND_bytes/g' src/engine.c
+# Патчим под OpenSSL 3.x (игнорируем ошибки, если патч не нужен)
+sed -i 's/ERR_remove_thread_state(NULL);//g' src/engine.c 2>/dev/null
+sed -i 's/RAND_pseudo_bytes/RAND_bytes/g' src/engine.c 2>/dev/null
 
-make
+echo "Компиляция MTProxy (может занять минуту)..."
+make -j$(nproc)
+
+# Проверяем, скомпилировался ли бинарник
+if [ ! -f "objs/bin/mtproto-proxy" ]; then
+    echo "ОШИБКА: MTProxy не скомпилировался. Скорее всего, проблема в версии OpenSSL."
+    echo "Попробуйте обновить систему: apt update && apt upgrade -y, и запустить скрипт заново."
+    exit 1
+fi
+
+# Включаем строгий режим обратно
+set -e
+
 cd objs/bin
 
 curl -s https://core.telegram.org/getProxySecret -o proxy-secret
 curl -s https://core.telegram.org/getProxyConfig -o proxy-multi.conf
 
-# ИСПРАВЛЕНИЕ: Генерация секрета БЕЗ переноса строки (tr -d '\n')
+# Генерация секрета строго без переноса строки
 SECRET="dd${FAKE_DOMAIN}$(head -c 16 /dev/urandom | xxd -p | tr -d '\n')"
 
 #######################################
@@ -115,47 +128,30 @@ cat > /var/www/landing/index.html <<EOF
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>${IP} | Сервер готов</title>
+<title>${IP}</title>
 <style>
-body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    background: #f8f9fa;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    height: 100vh;
-    margin: 0;
-}
-.container { max-width: 600px; text-align: center; }
+body { font-family: sans-serif; background: #f8f9fa; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+.container { text-align: center; background: white; padding: 40px; border-radius: 10px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); }
 h1 { color: #2c3e50; }
-.box { background: white; padding: 20px; margin-top: 20px; border-radius: 8px; }
 </style>
 </head>
 <body>
 <div class="container">
-<h1>${IP}</h1>
-<p>Сервер успешно настроен 🎉</p>
-<div class="box">
-<ul style="list-style:none;padding:0;text-align:left;">
-<li>✓ MTProxy работает на 443 порту</li>
-<li>✓ Nginx работает на 80 и 443 порту</li>
-<li>✓ sslh разделяет трафик</li>
-</ul>
-</div>
+<h1>Сервер работает</h1>
+<p>MTProxy + Nginx успешно настроены.</p>
 </div>
 </body>
 </html>
 EOF
 
 #######################################
-# NGINX (ИСПРАВЛЕНО для новых версий)
+# NGINX (Универсальный конфиг для любых версий)
 #######################################
 rm -f /etc/nginx/sites-enabled/default
 
 cat > /etc/nginx/sites-available/landing.conf <<EOF
 server {
-    listen 127.0.0.1:${NGINX_PORT} ssl;
-    http2 on;
+    listen 127.0.0.1:${NGINX_PORT} ssl http2;
     server_name _;
 
     ssl_certificate /etc/nginx/ssl/self.crt;
@@ -177,7 +173,7 @@ EOF
 ln -sf /etc/nginx/sites-available/landing.conf /etc/nginx/sites-enabled/landing.conf
 
 #######################################
-# SSLH (ИСПРАВЛЕН ПРИОРИТЕТ ПРАВИЛ)
+# SSLH (Без регулярок, простое совпадение)
 #######################################
 cat > /etc/systemd/system/sslh-mux.service <<EOF
 [Unit]
@@ -188,7 +184,7 @@ After=network.target
 ExecStart=/usr/sbin/sslh-select -f \
   --listen 0.0.0.0:443 \
   --ssh 127.0.0.1:${SSH_PORT} \
-  --sni ^${FAKE_DOMAIN}$:127.0.0.1:${MTPROXY_PORT} \
+  --sni ${FAKE_DOMAIN}:127.0.0.1:${MTPROXY_PORT} \
   --tls 127.0.0.1:${NGINX_PORT}
 Restart=always
 
@@ -229,16 +225,10 @@ systemctl restart sslh-mux
 # ФИНАЛ
 #######################################
 echo ""
-echo "=== ГОТОВО ==="
+echo "=== УСТАНОВКА УСПЕШНО ЗАВЕРШЕНА ==="
 echo ""
-echo "Ссылка для подключения (скопируй её полностью):"
+echo "Ссылка для подключения:"
 echo "tg://proxy?server=$IP&port=443&secret=$SECRET"
 echo ""
+echo "Если ссылка не кликается, используй:"
 echo "https://t.me/proxy?server=$IP&port=443&secret=$SECRET"
-echo ""
-echo "HTTP:  http://$IP"
-echo "HTTPS: https://$IP"
-echo ""
-echo "Управление:"
-echo "  systemctl status mtproxy"
-echo "  systemctl restart mtproxy"
